@@ -542,7 +542,7 @@ export default function KiosksPage() {
                             </TooltipTrigger>
                             <TooltipContent>
                               <div className="space-y-1">
-                                <p className="font-medium">Счет сдачи:</p>
+                                <p className="font-medium">Типы купюр:</p>
                                 {kiosk.changeAccount.denominations.map(
                                   (denom, idx) => (
                                     <p

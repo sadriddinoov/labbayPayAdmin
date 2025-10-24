@@ -1,8 +1,8 @@
 // config/api.ts
 import axios from "axios";
 
-export const url = "http://5.182.26.107:4000"
-export const socketUrl = "wss://eab23c405f28.ngrok-free.app"
+export const url = "https://equally-credible-terrier.ngrok-free.app"
+export const socketUrl = "wss://362d0e19a717.ngrok-free.app"
 // http://5.182.26.107:4000
 
 export const $api = axios.create({
