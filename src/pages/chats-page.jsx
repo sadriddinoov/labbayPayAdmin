@@ -200,7 +200,6 @@ export default function ChatsPage() {
       const socket = socketRef.current;
 
       socket.on("connect", () => {
-        // Сначала загружаем чаты для текущей вкладки
         const currentTab = currentTabRef.current;
         if (currentTab === "favorite") {
           socket.emit(SOCKET_EVENTS.GET_CHAT_FAVORITE, { favorite: "true" });
@@ -211,8 +210,6 @@ export default function ChatsPage() {
         } else if (currentTab === "completed") {
           socket.emit(SOCKET_EVENTS.GET_CHATS, { status: "completed", operatorId: decoded?.id });
         }
-        
-        // Затем загружаем остальные данные
         setIsLoadingTopics(true);
         socket.emit(SOCKET_EVENTS.GET_PROBLEM_TOPIC, {});
       });
@@ -285,191 +282,109 @@ export default function ChatsPage() {
       socket.on(SOCKET_EVENTS.USER_CHAT, onIncomingMessage);
       NEW_MESSAGE_ALIASES.forEach((evt) => socket.on(evt, onIncomingMessage));
 
-      // GET_CHATS
+      // -------- FIX 2: Защищаем favorite от перезаписи из GET_CHATS --------
       socket.on(SOCKET_EVENTS.GET_CHATS, (data) => {
-        let tab = currentTabRef.current;
-        let result = (data && data.result) || [];
-        
-        // Определяем статус чатов из данных
-        if (result.length > 0) {
-          const firstChat = result[0];
-          if (firstChat.status) {
-            tab = firstChat.status;
-          }
-        }
-        if (result && result.length > 0) {
-          const mappedChats = result.map((chat, index) => {
-            return {
-              id: chat.id || `unknown_${index}`,
-              clientName: chat.clientName || "Неизвестный клиент",
-              clientPhone: chat.clientPhone || "Неизвестный номер",
-              operatorName: Array.isArray(chat.operatorName)
-                ? chat.operatorName.join(", ")
-                : chat.operatorName || "Неизвестный оператор",
-              date: chat.date
-                ? new Date(chat.date).toLocaleString("ru-RU", {
-                    day: "2-digit",
-                    month: "2-digit",
-                    year: "numeric",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })
-                : "Неизвестная дата",
-              messageCount: chat.messageCount || 0,
-              messages: Array.isArray(chat.messages)
-                ? chat.messages.map((msg, msgIndex) =>
-                    normalizeIncomingMessage({
-                      ...msg,
-                      id: msg.id || `msg_${msgIndex}`,
-                    })
-                  )
-                : [],
-              isFavorite: chat.isFavorite || false,
-              isAcknowledged: chat.isAcknowledged || false,
-              user_id: chat.user_id || null,
-              operatorId: Array.isArray(chat.operatorId)
-                ? chat.operatorId
-                : chat.operatorId || null,
-              UnreadMessage: chat.UnreadMessage || 0,
-              readAt: chat.readAt || null,
-              status: chat.status || tab,
-              endDate: chat.endDate
-                ? new Date(chat.endDate).toLocaleDateString("ru-RU", {
-                    day: "2-digit",
-                    month: "2-digit",
-                    year: "numeric",
-                  })
-                : "",
-              rating: chat.rating || 0,
-              responseTime: chat.responseTime
-                ? formatResponseTime(chat.responseTime)
-                : "",
-              topic: chat.topic || "",
-              description: chat.description || "",
-            };
-          });
-          setChats((prevChats) => ({
-            ...prevChats,
-            [tab]: mappedChats,
-          }));
-        } else {
-          setChats((prevChats) => ({
-            ...prevChats,
-            [tab]: [],
-          }));
-        }
+        const tabNow = currentTabRef.current;
+        if (tabNow === "favorite") return; // не трогаем вкладку избранного
 
-        if (selectedChat && result) {
-          const updatedChat = result.find((c) => c.id === selectedChat.id);
-          if (updatedChat) {
-            setSelectedChat({
-              id: updatedChat.id,
-              clientName: updatedChat.clientName,
-              clientPhone: updatedChat.clientPhone,
-              operatorName: Array.isArray(updatedChat.operatorName)
-                ? updatedChat.operatorName.join(", ")
-                : updatedChat.operatorName,
-              date: new Date(updatedChat.date).toLocaleString("ru-RU", {
+        const result = Array.isArray(data?.result) ? data.result : [];
+        const tab = tabNow; // не «угадываем» статус из данных
+
+        const mappedChats = result.map((chat, index) => ({
+          id: chat.id || `unknown_${index}`,
+          clientName: chat.clientName || "Неизвестный клиент",
+          clientPhone: chat.clientPhone || "Неизвестный номер",
+          operatorName: Array.isArray(chat.operatorName)
+            ? chat.operatorName.join(", ")
+            : chat.operatorName || "Неизвестный оператор",
+          date: chat.date
+            ? new Date(chat.date).toLocaleString("ru-RU", {
                 day: "2-digit",
                 month: "2-digit",
                 year: "numeric",
                 hour: "2-digit",
                 minute: "2-digit",
-              }),
-              endDate: updatedChat.endDate
-                ? new Date(updatedChat.endDate).toLocaleDateString("ru-RU", {
-                    day: "2-digit",
-                    month: "2-digit",
-                    year: "numeric",
-                  })
-                : undefined,
-              rating: updatedChat.rating || 0,
-              responseTime: updatedChat.responseTime
-                ? formatResponseTime(updatedChat.responseTime)
-                : "",
-              isFavorite: updatedChat.isFavorite || false,
-              isAcknowledged: updatedChat.isAcknowledged || false,
-              topic: updatedChat.topic || "",
-              description: updatedChat.description || "",
-              messages: Array.isArray(updatedChat.messages)
-                ? updatedChat.messages.map((msg) => normalizeIncomingMessage(msg))
-                : [],
-              user_id: updatedChat.user_id,
-              operatorId: Array.isArray(updatedChat.operatorId)
-                ? updatedChat.operatorId
-                : updatedChat.operatorId,
-              UnreadMessage: updatedChat.UnreadMessage,
-              readAt: updatedChat.readAt,
-              status: updatedChat.status,
-            });
-          }
-        }
+              })
+            : "Неизвестная дата",
+          messageCount: chat.messageCount || 0,
+          messages: Array.isArray(chat.messages)
+            ? chat.messages.map((msg, msgIndex) =>
+                normalizeIncomingMessage({ ...msg, id: msg.id || `msg_${msgIndex}` })
+              )
+            : [],
+          isFavorite: !!chat.isFavorite,
+          isAcknowledged: chat.isAcknowledged || false,
+          user_id: chat.user_id || null,
+          operatorId: Array.isArray(chat.operatorId) ? chat.operatorId : chat.operatorId || null,
+          UnreadMessage: chat.UnreadMessage || 0,
+          readAt: chat.readAt || null,
+          status: chat.status || tab,
+          endDate: chat.endDate
+            ? new Date(chat.endDate).toLocaleDateString("ru-RU", {
+                day: "2-digit",
+                month: "2-digit",
+                year: "numeric",
+              })
+            : "",
+          rating: chat.rating || 0,
+          responseTime: chat.responseTime ? formatResponseTime(chat.responseTime) : "",
+          topic: chat.topic || "",
+          description: chat.description || "",
+        }));
+
+        setChats((prev) => ({ ...prev, [tab]: mappedChats }));
       });
 
-      // Избранные
+      // -------- FIX 1: Правильный парсинг GET_CHAT_FAVORITE --------
       socket.on(SOCKET_EVENTS.GET_CHAT_FAVORITE, (data) => {
-        let favoriteChats = [];
-        if (data && data.action === "get_chats" && Array.isArray(data.result)) {
-          favoriteChats = data.result
-            .filter((chat) => chat.isFavorite)
-            .map((chat, index) => {
-              return {
-                id: chat.id || `unknown_${index}`,
-                clientName: chat.clientName || "Неизвестный клиент",
-                clientPhone: chat.clientPhone || "Неизвестный номер",
-                operatorName: Array.isArray(chat.operatorName)
-                  ? chat.operatorName.join(", ")
-                  : chat.operatorName || "Неизвестный оператор",
-                date: chat.date
-                  ? new Date(chat.date).toLocaleString("ru-RU", {
-                      day: "2-digit",
-                      month: "2-digit",
-                      year: "numeric",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })
-                  : "Неизвестная дата",
-                messageCount: chat.messageCount || 0,
-                messages: Array.isArray(chat.messages)
-                  ? chat.messages.map((msg, msgIndex) =>
-                      normalizeIncomingMessage({
-                        ...msg,
-                        id: msg.id || `msg_${msgIndex}`,
-                      })
-                    )
-                  : [],
-                isFavorite: true,
-                isAcknowledged: chat.isAcknowledged || false,
-                user_id: chat.user_id || null,
-                operatorId: Array.isArray(chat.operatorId)
-                  ? chat.operatorId
-                  : chat.operatorId || null,
-                UnreadMessage: chat.UnreadMessage || 0,
-                readAt: chat.readAt || null,
-                status: chat.status || "completed",
-                endDate: chat.endDate
-                  ? new Date(chat.endDate).toLocaleDateString("ru-RU", {
-                      day: "2-digit",
-                      month: "2-digit",
-                      year: "numeric",
-                    })
-                  : "",
-                rating: chat.rating || 0,
-                responseTime: chat.responseTime
-                  ? formatResponseTime(chat.responseTime)
-                  : "",
-                topic: chat.topic || "",
-                description: chat.description || "",
-              };
-            });
-        }
-        const uniqueFavorite = [
-          ...new Map(favoriteChats.map((item) => [item.id, item])).values(),
-        ];
-        setChats((prevChats) => ({
-          ...prevChats,
-          favorite: uniqueFavorite,
-        }));
+        const list = Array.isArray(data?.result) ? data.result : [];
+
+        const mapped = list
+          .filter((chat) => chat?.isFavorite)
+          .map((chat, index) => ({
+            id: chat.id || `unknown_${index}`,
+            clientName: chat.clientName || "Неизвестный клиент",
+            clientPhone: chat.clientPhone || "Неизвестный номер",
+            operatorName: Array.isArray(chat.operatorName)
+              ? chat.operatorName.join(", ")
+              : chat.operatorName || "Неизвестный оператор",
+            date: chat.date
+              ? new Date(chat.date).toLocaleString("ru-RU", {
+                  day: "2-digit",
+                  month: "2-digit",
+                  year: "numeric",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })
+              : "Неизвестная дата",
+            messageCount: chat.messageCount || 0,
+            messages: Array.isArray(chat.messages)
+              ? chat.messages.map((msg, msgIndex) =>
+                  normalizeIncomingMessage({ ...msg, id: msg.id || `msg_${msgIndex}` })
+                )
+              : [],
+            isFavorite: true,
+            isAcknowledged: chat.isAcknowledged || false,
+            user_id: chat.user_id || null,
+            operatorId: Array.isArray(chat.operatorId) ? chat.operatorId : chat.operatorId || null,
+            UnreadMessage: chat.UnreadMessage || 0,
+            readAt: chat.readAt || null,
+            status: "favorite", // фикс: явно помечаем как favorite
+            endDate: chat.endDate
+              ? new Date(chat.endDate).toLocaleDateString("ru-RU", {
+                  day: "2-digit",
+                  month: "2-digit",
+                  year: "numeric",
+                })
+              : "",
+            rating: chat.rating || 0,
+            responseTime: chat.responseTime ? formatResponseTime(chat.responseTime) : "",
+            topic: chat.topic || "",
+            description: chat.description || "",
+          }));
+
+        const unique = [...new Map(mapped.map((c) => [c.id, c])).values()];
+        setChats((prev) => ({ ...prev, favorite: unique }));
       });
 
       // Темы проблем
@@ -653,7 +568,6 @@ export default function ChatsPage() {
       return { ...prev, [activeTab]: arr };
     });
 
-    // ВАЖНО: правильное событие
     socketRef.current.emit("send_operator_message", payload);
   };
 
@@ -664,30 +578,26 @@ export default function ChatsPage() {
     if (files.length === 0) return;
 
     try {
-      // читаем все файлы как dataURL (base64)
       const dataURLs = await Promise.all(files.map(readFileAsDataURL));
 
-      // Формируем attachments по контракту
       const attachments = files.map((f, i) => {
         const isImg = f.type && f.type.startsWith("image/");
         if (isImg) {
           return { type: "image", name: f.name, url: dataURLs[i] };
         }
-        // для любых других файлов type можно опустить
         return { name: f.name, url: dataURLs[i] };
       });
 
       const token = localStorage.getItem(tokenName) || "";
-      const caption = newMessage.trim(); // текущий текст идёт как description/caption
+      const caption = newMessage.trim();
 
       const payload = {
         token,
         user_id: selectedChat.user_id,
         attachments,
-        text: caption, // может быть пусто — ок
+        text: caption,
       };
 
-      // оптимистично в UI
       const optimistic = {
         id: (selectedChat?.messages?.length || 0) + 1,
         sender: "operator",
@@ -715,10 +625,8 @@ export default function ChatsPage() {
         return { ...prev, [activeTab]: arr };
       });
 
-      // emit альбом/файл
       socketRef.current.emit("send_operator_message", payload);
 
-      // очистить caption и инпут файлов
       setNewMessage("");
       if (fileInputRef.current) fileInputRef.current.value = "";
     } catch (e) {
