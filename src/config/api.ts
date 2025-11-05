@@ -1,7 +1,7 @@
 // config/api.ts
 import axios from "axios";
 
-export const url = "http://5.182.26.107:4000"
+export const url = "https://equally-credible-terrier.ngrok-free.app"
 export const socketUrl = "wss://equally-credible-terrier.ngrok-free.app"
 export const LOCAL_BASE = "http://localhost:2005";
 export const PUBLIC_BASE = "https://equally-credible-terrier.ngrok-free.app";

@@ -418,14 +418,18 @@ const mapChatFromDoc = (chat, fallbackStatus = "new") => {
     UnreadMessage: chat.UnreadMessage || 0,
     readAt: chat.readAt || null,
     status,
+    // >>> ИЗМЕНЕНО: показываем и дату, и время завершения
     endDate:
       status === "completed" && chat.endDate
-        ? new Date(chat.endDate).toLocaleDateString("ru-RU", {
+        ? new Date(chat.endDate).toLocaleString("ru-RU", {
             day: "2-digit",
             month: "2-digit",
             year: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
           })
         : "",
+    // <<<
     rating: status === "completed" ? (chat.rating || 0) : 0,
     responseTime: status === "completed" && chat.responseTime ? formatResponseTime(chat.responseTime) : "",
     topic: status === "completed" ? (chat.topic || "") : "",
@@ -1322,11 +1326,15 @@ export default function ChatsPage() {
     const topicObj = problemTopics.find((t) => String(t.id) === String(closingTopic));
     updatedChat.topic = (topicObj && topicObj.problem_topic) || "";
     updatedChat.description = closingDescription;
-    updatedChat.endDate = new Date().toLocaleDateString("ru-RU", {
+    // >>> ИЗМЕНЕНО: используем дату + время, как для начала
+    updatedChat.endDate = new Date().toLocaleString("ru-RU", {
       day: "2-digit",
       month: "2-digit",
       year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
     });
+    // <<<
     updatedChat.rating = Math.floor(Math.random() * 3) + 3;
     updatedChat.responseTime = `${Math.floor(Math.random() * 10) + 1} мин`;
     updatedChat.status = "completed";
@@ -1699,7 +1707,7 @@ export default function ChatsPage() {
             </TabsContent>
 
             {/* FAVORITE */}
-            <TabsContent value="favorite" className="m-0 h-full">
+            <TabsContent value="favorite" className="м-0 h-full">
               <Card className="border-0 rounded-none h-full">
                 <CardHeader className="p-4">
                   <CardTitle className="text-lg">Избранные тикеты</CardTitle>
@@ -1734,16 +1742,14 @@ export default function ChatsPage() {
                             {!compactCols && <TableCell>{chat.operatorName}</TableCell>}
                             {!compactCols && <TableCell>{chat.date}</TableCell>}
                             {!compactCols && (
-                              <TableCell>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="favorite-button"
-                                  onClick={() => toggleFavorite(chat)}
-                                >
-                                  <StarOff className="h-4 w-4 text-yellow-500" />
-                                </Button>
-                              </TableCell>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="favorite-button"
+                                onClick={() => toggleFavorite(chat)}
+                              >
+                                <StarOff className="h-4 w-4 text-yellow-500" />
+                              </Button>
                             )}
                           </TableRow>
                         ))
