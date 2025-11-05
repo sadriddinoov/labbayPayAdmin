@@ -78,8 +78,6 @@ const NEW_MESSAGE_ALIASES = ["new_message", "operator_message", "chat_updated"];
 const EXTRA_BROADCAST_ALIASES = ["new_chat_inserted", "chat_updated"];
 const DEBUG = true;
 
-const UPLOADS_PATH = "/uploads";
-
 // ---------- Pagination ----------
 const PAGE_SIZE = 7;
 const Pagination = ({ currentPage, totalPages, onPageChange }) => {
@@ -97,7 +95,6 @@ const Pagination = ({ currentPage, totalPages, onPageChange }) => {
       startPage = Math.max(1, totalPages - maxPagesToShow + 1);
     }
   }
-
   for (let i = startPage; i <= endPage; i++) pages.push(i);
 
   return (
@@ -132,45 +129,72 @@ const Pagination = ({ currentPage, totalPages, onPageChange }) => {
 };
 
 // ---------- helpers ----------
+function normalizeUploadsPath(s) {
+  // приводит './uploads/..' или 'uploads/..' к '/uploads/..'
+  const str = String(s || "").trim();
+  if (!str) return str;
+  const m = /^\.?\/?uploads(\/.*)$/i.exec(str);
+  if (m) return "/uploads" + m[1];
+  return str;
+}
+
 function normalizeMediaUrl(raw) {
-  const s = String(raw || "");
+  let s = String(raw || "").trim();
   if (!s) return s;
+
+  // приведение локального относительного пути к /uploads
+  s = normalizeUploadsPath(s);
+
+  // не трогаем эти схемы
   if (/^(data:|blob:)/i.test(s)) return s;
 
-  const base = String(PUBLIC_BASE || "").replace(/\/+$/, "");
+  const pubBaseStr = String(PUBLIC_BASE || "").replace(/\/+$/, "");
+  if (!pubBaseStr) return s;
+
+  let pub;
   try {
-    const u = new URL(s, base + "/");
-
-    if (
-      s.startsWith(UPLOADS_PATH) ||
-      u.pathname.startsWith(`${UPLOADS_PATH}/`) ||
-      u.pathname === UPLOADS_PATH
-    ) {
-      return `${base}${u.pathname}${u.search}${u.hash}`;
-    }
-
-    const local = new URL(LOCAL_BASE);
-    const pub = new URL(base + "/");
-
-    if (u.host === local.host) {
-      return `${base}${u.pathname}${u.search}${u.hash}`;
-    }
-
-    if (u.hostname === pub.hostname && u.protocol === pub.protocol && u.port) {
-      return `${base}${u.pathname}${u.search}${u.hash}`;
-    }
-
-    if (u.hostname === pub.hostname && (!u.port || u.port === "")) {
-      return `${base}${u.pathname}${u.search}${u.hash}`;
-    }
-
-    return u.href;
+    pub = new URL(pubBaseStr + "/");
   } catch {
-    if (s.startsWith(UPLOADS_PATH)) {
-      return `${String(PUBLIC_BASE || "").replace(/\/+$/, "")}${s}`;
-    }
     return s;
   }
+
+  // распарсим URL (для относительных используем PUBLIC_BASE как базу)
+  let u;
+  try {
+    u = new URL(s, pub);
+  } catch {
+    // если совсем не распарсилось, но похоже на uploads — склеим вручную
+    if (/^\.?\/?uploads\//i.test(s)) return pub.origin + normalizeUploadsPath(s);
+    return s;
+  }
+
+  // 1) любые ссылки, у которых путь содержит /uploads — форсим PUBLIC_BASE
+  if (/\/uploads(\/|$)/i.test(u.pathname)) {
+    return pub.origin + u.pathname + u.search + u.hash;
+  }
+
+  // 2) всё, что пришло с LOCAL_BASE → переводим на PUBLIC_BASE
+  try {
+    if (LOCAL_BASE) {
+      const local = new URL(String(LOCAL_BASE));
+      if (u.hostname === local.hostname) {
+        return pub.origin + u.pathname + u.search + u.hash;
+      }
+    }
+  } catch {
+    /* ignore bad LOCAL_BASE */
+  }
+
+  // 3) тот же hostname, но отличается порт/протокол → нормализуем к PUBLIC_BASE
+  if (u.hostname === pub.hostname && u.origin !== pub.origin) {
+    return pub.origin + u.pathname + u.search + u.hash;
+  }
+
+  // 4) уже публичный — оставляем
+  if (u.origin === pub.origin) return u.href;
+
+  // 5) внешние http(s) CDN и т.п. — возвращаем как есть
+  return u.href;
 }
 
 // устойчивое открытие ссылок для http(s), blob:, data:
@@ -250,10 +274,43 @@ const formatResponseTime = (minutes) => {
   return `${mins} мин`;
 };
 
+function guessType(rawType, mime) {
+  const t = String(rawType || "").toLowerCase();
+  const m = String(mime || "").toLowerCase();
+
+  if (t === "photo" || t === "image") return "photo";
+  if (t === "video") return "video";
+  if (t === "document" || t === "file") return "document";
+  if (t === "voice" || t === "audio") return "voice";
+
+  if (m.startsWith("image/")) return "photo";
+  if (m.startsWith("video/")) return "video";
+  if (m.startsWith("audio/")) return "voice";
+
+  return t || "text";
+}
+
+function pickUrlFromMsg(msg = {}) {
+  // приоритет: download_url → url → file_url → fileUrl → file → file_path
+  let u =
+    msg.download_url ||
+    msg.url ||
+    msg.file_url ||
+    msg.fileUrl ||
+    msg.file ||
+    msg.file_path ||
+    null;
+
+  if (u) u = normalizeUploadsPath(u);
+  return u ? normalizeMediaUrl(u) : null;
+}
+
 const normalizeIncomingMessage = (msg = {}) => {
   const rawType = String(msg.type || "").toLowerCase();
+  const mime = msg.mime_type || msg.mimeType || "";
+  const type = guessType(rawType, mime);
 
-  const url = msg.url || msg.file_url || msg.fileUrl || msg.file || null;
+  const url = pickUrlFromMsg(msg);
   const text = msg.text || msg.caption || "";
 
   const timeStr = msg.time
@@ -272,32 +329,23 @@ const normalizeIncomingMessage = (msg = {}) => {
         minute: "2-digit",
       });
 
-  let type = "text";
-  if (rawType === "photo" || rawType === "image") type = "photo";
-  else if (rawType === "video") type = "video";
-  else if (rawType === "document" || rawType === "file") type = "document";
-  else if (rawType === "text" || !rawType) type = "text";
-  else type = rawType;
-
   let attachments;
   if (Array.isArray(msg.attachments) && msg.attachments.length > 0) {
     attachments = msg.attachments
       .map((a) => {
-        const tRaw = String(a?.type || "").toLowerCase();
-        const t = tRaw.startsWith("image")
-          ? "image"
-          : tRaw.startsWith("video")
-          ? "video"
-          : a?.type === "photo"
-          ? "image"
-          : a?.type === "document"
-          ? "document"
-          : a?.type || "document";
-        const au = a?.url || a?.file_url || a?.fileUrl || "";
+        const t = guessType(a?.type, a?.mime || a?.mime_type || a?.content_type);
+        const au =
+          a?.download_url ||
+          a?.url ||
+          a?.file_url ||
+          a?.fileUrl ||
+          a?.file_path ||
+          a?.file ||
+          "";
         return {
           type: t,
-          name: a?.name || a?.filename || "",
-          url: normalizeMediaUrl(au),
+          name: a?.name || a?.filename || msg?.file_name || "",
+          url: normalizeMediaUrl(normalizeUploadsPath(au)),
         };
       })
       .filter((a) => a.url);
@@ -317,10 +365,14 @@ const normalizeIncomingMessage = (msg = {}) => {
     caption_entities: msg.caption_entities || [],
     time: timeStr,
     type,
-    url: url ? normalizeMediaUrl(url) : null,
-    name: msg.name || msg.filename || null,
-    path: msg.path || null,
+    url,
+    name: msg.file_name || msg.name || msg.filename || null,
+    path: msg.file_path || msg.path || null,
     attachments,
+    mime_type: mime || undefined,
+    width: msg.width,
+    height: msg.height,
+    duration: msg.duration,
   };
 };
 
@@ -557,7 +609,7 @@ export default function ChatsPage() {
           incomingArray = [payload.message];
         } else if (
           payload &&
-          (payload.text || payload.caption || payload.url || payload.attachments || payload.type)
+          (payload.text || payload.caption || payload.download_url || payload.file_path || payload.url || payload.attachments || payload.type)
         ) {
           incomingArray = [payload];
         }
@@ -609,7 +661,7 @@ export default function ChatsPage() {
       socket.on(SOCKET_EVENTS.USER_CHAT, onIncomingMessageRaw);
       NEW_MESSAGE_ALIASES.forEach((evt) => socket.on(evt, onIncomingMessageRaw));
 
-      // MERGE helper — сохраняем порядок: replace-in-place, иначе append
+      // MERGE helper — сохраняем порядок
       const upsertList = (prevArr = [], incoming = []) => {
         const byIndex = new Map(prevArr.map((c, i) => [String(c.id), i]));
         const next = [...prevArr];
@@ -629,7 +681,7 @@ export default function ChatsPage() {
                 typeof it.isFavorite !== "undefined" ? it.isFavorite : old.isFavorite,
             };
           } else {
-            next.push(it); // append — порядок не прыгает
+            next.push(it);
           }
         }
         return next;
@@ -650,7 +702,7 @@ export default function ChatsPage() {
         setChats((prev) => {
           const newNew = dedupeById(upsertList(prev.new, news));
           const mergedActive = dedupeById(upsertList(prev.active, actives));
-          const activeOrdered = ensureStableOrder(mergedActive, prev.active); // фикс порядка
+          const activeOrdered = ensureStableOrder(mergedActive, prev.active);
           const newCompleted = dedupeById(upsertList(prev.completed, completed));
           const newFav = dedupeById(upsertList(prev.favorite, favs));
           return {
@@ -856,7 +908,7 @@ export default function ChatsPage() {
             if (toIdx !== -1) {
               return { from: cleaned, to: replaceInPlace(toArr, item) };
             }
-            return { from: cleaned, to: [...toArr, item] }; // append в конец
+            return { from: cleaned, to: [...toArr, item] };
           };
 
           let next = { ...prev };
@@ -903,19 +955,18 @@ export default function ChatsPage() {
           next.completed = dedupeById(next.completed);
           next.favorite = dedupeById(next.favorite);
 
-          // СТАБИЛИЗАЦИЯ порядка активных — ключевая строка
+          // стабилизация активных
           next.active = ensureStableOrder(next.active, prev.active);
 
           return next;
         });
 
-        // >>> догружаем тексты сообщений сразу после broadcast,
-        // если чату присвоен статус active (или открыт)
+        // догружаем тексты если надо
         if (uid && (targetStatus === "active" || (selectedChat && selectedChat.user_id === uid))) {
           requestLatestThread(uid);
         }
 
-        // >>> синхронизация открытого чата
+        // синхронизация открытого чата
         setSelectedChat((prev) => {
           if (!prev) return prev;
           const sameId = String(prev.id) === String(mapped.id);
@@ -1065,6 +1116,9 @@ export default function ChatsPage() {
         if (mime.startsWith("video/")) {
           return { type: "video", name: f.name, url: dataURLs[i] };
         }
+        if (mime.startsWith("audio/")) {
+          return { type: "audio", name: f.name, url: dataURLs[i] };
+        }
         return { type: "document", name: f.name, url: dataURLs[i] };
       });
 
@@ -1161,7 +1215,6 @@ export default function ChatsPage() {
     return list.slice(start, start + PAGE_SIZE);
   }, [filteredChatsByTab, activeTab, currentPage]);
 
-  // --- выделение выбранной строки (НЕ подсвечиваем на вкладке "new") ---
   const isSelected = (c, tab) =>
     tab !== "new" && selectedChat && activeTab === tab && String(selectedChat.id) === String(c.id);
 
@@ -1172,7 +1225,6 @@ export default function ChatsPage() {
     }`;
 
   const handleOpenChat = (chat) => {
-    // сохраняем позицию скролла для вкладки Active
     const prevScroll =
       activeTab === "active" && activeListRef.current
         ? activeListRef.current.scrollTop
@@ -1189,7 +1241,6 @@ export default function ChatsPage() {
       setIsChatOpen(true);
       acknowledgeChat(chat.id);
 
-      // READ_MESSAGE только для "new" и "active"
       if (socketRef.current && (activeTab === "new" || activeTab === "active")) {
         const token = localStorage.getItem(tokenName) || "";
         const statusForRead = chat.status || (activeTab === "new" ? "new" : "active");
@@ -1210,12 +1261,10 @@ export default function ChatsPage() {
           return {
             ...prevChats,
             new: newChats,
-            // добавляем в КОНЕЦ active, чтобы порядок не прыгал и пагинация не сбрасывалась
             active: dedupeById([...prevChats.active, updatedChat]),
           };
         });
         setActiveTab("active");
-        // сразу подтянем всю ленту сообщений выбранного пользователя
         if (chat.user_id) requestLatestThread(chat.user_id);
       } else if (chat.status === "active") {
         setChats((prevChats) => {
@@ -1228,7 +1277,6 @@ export default function ChatsPage() {
       }
     }
 
-    // восстанавливаем позицию скролла (только для активной вкладки)
     if (prevScroll !== null) {
       requestAnimationFrame(() => {
         if (activeListRef.current) activeListRef.current.scrollTop = prevScroll;
@@ -1260,7 +1308,7 @@ export default function ChatsPage() {
   const handleSendMessage = (e) => {
     if (e) e.preventDefault();
     const text = newMessage.trim();
-       if (!text) return;
+    if (!text) return;
     sendTextMessage(text);
     setNewMessage("");
   };
@@ -1291,7 +1339,6 @@ export default function ChatsPage() {
       return {
         ...prevChats,
         active: dedupeById(activeChats),
-        // append в completed — не меняем относительный порядок
         completed: dedupeById([...prevChats.completed, updatedChat]),
         favorite: dedupeById(updatedFavorite),
       };
@@ -1307,7 +1354,6 @@ export default function ChatsPage() {
       socketRef.current.emit("exitchat", { chatId: selectedChat.id });
     }
 
-    // явный тост локально
     toast.success("Тикет успешно закрыт");
 
     setIsClosingTicket(false);
@@ -1336,7 +1382,7 @@ export default function ChatsPage() {
           ? prevChats.favorite.map((c) =>
               c.id === chat.id ? { ...c, ...updatedChat } : c
             )
-          : [...prevChats.favorite, { ...updatedChat }]; // append
+          : [...prevChats.favorite, { ...updatedChat }];
         return { ...updatedChats, favorite: dedupeById(updatedFavorite) };
       });
       if (selectedChat && selectedChat.id === chat.id) {
@@ -1381,7 +1427,6 @@ export default function ChatsPage() {
     }
   };
 
-  // флаг сжатия колонок слева при открытом чате
   const compactCols = isChatOpen;
 
   return (
@@ -1821,6 +1866,20 @@ export default function ChatsPage() {
                                     </div>
                                   );
                                 }
+                                if (t === "audio" || t === "voice") {
+                                  return (
+                                    <div key={`${message.id}-att-${aIdx}`} className="space-y-1">
+                                      <audio src={a.url} controls className="w-full" />
+                                      <button
+                                        type="button"
+                                        className={`text-xs underline inline-flex items-center gap-1 ${isClient ? "text-blue-600" : "text-white"}`}
+                                        onClick={() => openLink(a.url, a.name)}
+                                      >
+                                        Открыть аудио <ExternalLink size={12} />
+                                      </button>
+                                    </div>
+                                  );
+                                }
                                 return (
                                   <a
                                     key={`${message.id}-att-${aIdx}`}
@@ -1869,6 +1928,22 @@ export default function ChatsPage() {
                               onClick={() => openLink(message.url, message.name)}
                             >
                               Открыть в новой вкладке <ExternalLink size={12} />
+                            </button>
+                          </div>
+                        ) : (message.type === "voice" || message.type === "audio") && message.url ? (
+                          <div className="space-y-2">
+                            <audio
+                              src={message.url}
+                              controls
+                              className="w-full"
+                            />
+                            {(message.text || message.caption) && <p>{message.text || message.caption}</p>}
+                            <button
+                              type="button"
+                              className={`text-xs underline inline-flex items-center gap-1 ${isClient ? "text-blue-600" : "text-white"}`}
+                              onClick={() => openLink(message.url, message.name)}
+                            >
+                              Открыть аудио <ExternalLink size={12} />
                             </button>
                           </div>
                         ) : message.type === "document" && message.url ? (
@@ -1926,7 +2001,7 @@ export default function ChatsPage() {
                         ref={fileInputRef}
                         onChange={(e) => handleFilesChosen(e.target.files)}
                         className="hidden"
-                        accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip,.rar"
+                        accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip,.rar"
                         multiple
                       />
                       <div className="absolute bottom-2 right-2">
